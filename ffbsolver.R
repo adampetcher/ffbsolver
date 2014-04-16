@@ -15,15 +15,22 @@ library("DEoptim")
 objective <- function(m, sigma, obj_mu, o_sigma, o_mu){
   m_mat <- as(m, "matrix")
   covSum <- o_sigma+t(m_mat)%*%sigma%*%m_mat
-  (-t(m_mat)%*%obj_mu + o_mu)/sqrt(covSum)
+  (o_mu - t(m_mat)%*%obj_mu)/sqrt(covSum)
 }
 
 objective_with_constraints <- function(m, sigma, obj_mu, o_sigma, o_mu, A, b){
   m_mat <- as(m, "matrix")
   covSum <- o_sigma + t(m_mat)%*%sigma%*%m_mat
-  res <- (-t(m_mat)%*%obj_mu + o_mu)/sqrt(covSum)
-  if(prod(A %*% m - b >= 0)) res else 
-    res + abs(min(A %*% m - b))
+  res <- (o_mu - t(m_mat)%*%obj_mu)/sqrt(covSum)
+  feasibleTest <- A %*% m - b 
+  if(prod(feasibleTest >= 0)){
+    res
+    }
+  else 
+  {
+    feasibleTest <- pmin(feasibleTest, 0)
+    res + 2 ^ 10*abs(sum(feasibleTest))
+  }
 }
 
 # gradient of objective function
@@ -42,7 +49,8 @@ chooseActivePlayersRandom <- function(dontSelect, pos, posConstraints){
   while(curPos <= 4){
     i <- 1
     while(i <= posConstraints[curPos]){  
-      curPlayer <- sample(setdiff(which(pos[curPos,] == 1), dontSelect), 1)
+      options <- setdiff(which(pos[curPos,] == 1), dontSelect)
+      curPlayer <- sample(c(options, options), 1)
       dontSelect <- c(dontSelect, curPlayer)
       res <- c(res, curPlayer)
       i <- i + 1
@@ -53,7 +61,8 @@ chooseActivePlayersRandom <- function(dontSelect, pos, posConstraints){
   # choose opponent RB_WR
   i <- 1
   while(i <= posConstraints[5]){  
-    curPlayer <- sample(setdiff(c(which(pos[3,] == 1), which(pos[4,] == 1)), dontSelect), 1)
+    options <- setdiff(c(which(pos[3,] == 1), which(pos[4,] == 1)), dontSelect)
+    curPlayer <- sample(c(options, options), 1)
     dontSelect <- c(dontSelect, curPlayer)
     res <- c(res, curPlayer)
     i <- i + 1
@@ -87,7 +96,7 @@ integerizeSolution <- function(soln, pos, posConstraints) {
   sort(res)
 }
 
-ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, globalOptim=FALSE){
+ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, initSoln, globalOptim=FALSE, randomInitPop=FALSE){
   numPlayers <- length(mu)
   rosterSize <- length(oppRoster)
   
@@ -102,7 +111,7 @@ ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, globa
   A_id <- diag(1, numPlayers) # at least 0 and at most 1 of any player
   
   # position constraints
-  A_pos <- -1*allPlayerPos
+  A_pos <- -1*pos
   A_pos <- rBind(A_pos, -(pos[3,] + pos[4,]))
   A_pos <- as.matrix(A_pos)  
   
@@ -120,7 +129,7 @@ ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, globa
   epsilon <- 10^-8
   b <- c(b, rep(-epsilon, rosterSize))
   
-  m_init <- as.vector(sparseVector(i=sort(as.vector(myActive)), x=1, length=numPlayers)) 
+  m_init <- as.vector(sparseVector(i=sort(as.vector(initSoln)), x=1, length=numPlayers)) 
   
   # local optimization
   # perturb the initial point so it is in the interior of the region
@@ -133,22 +142,27 @@ ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, globa
   soln_global <- soln_local
   if(globalOptim){
     
-  initPop <- t(m_init)
-  popSize <- 10 * numPlayers
-  dontSelect <- which(mySelectionPlayerMeans == 0)
-  while(dim(initPop)[1] < popSize){
-    newActive <- chooseActivePlayersRandom(dontSelect, pos, posConstraints)
-    newMem <- as.vector(sparseVector(i=sort(newActive), x=1, length=numPlayers)) 
-    initPop <- rBind(initPop, t(newMem))
-  }
+    # we can choose an initial populate of randomly-selected feasible teams
+    initPop <- NULL
+    popSize <- 10 * numPlayers
+    if(randomInitPop){
+      initPop <- t(m_init)
+      dontSelect <- oppRoster
+      while(dim(initPop)[1] < popSize){
+        newActive <- chooseActivePlayersRandom(dontSelect, pos, posConstraints)
+        newMem <- as.vector(sparseVector(i=sort(newActive), x=1, length=numPlayers)) 
+        initPop <- rBind(initPop, t(newMem))
+      }
+    }
   
-  
-  startTime <- proc.time()
-  res <- DEoptim(objective_with_constraints, rep(0, numPlayers), rep(1, numPlayers), 
+    startTime <- proc.time()
+    res <- DEoptim(objective_with_constraints, rep(0, numPlayers), rep(1, numPlayers), 
                  sigma=sigma, obj_mu=mu, o_sigma=o_sigma, o_mu=o_mu, A=A, b=b,
-                 DEoptim.control(NP=popSize,initialpop=initPop, parallelType=1, parVar=c()))
-  runningTime <- proc.time() - startTime
-  soln_global <- res$optim$bestmem
+                 DEoptim.control(iter=1000,
+                                 NP=popSize,initialpop=initPop, 
+                                 parallelType=1, parVar=c()))
+    runningTime <- proc.time() - startTime
+    soln_global <- res$optim$bestmem
   }
   
   solns <- list(soln_local, soln_global)

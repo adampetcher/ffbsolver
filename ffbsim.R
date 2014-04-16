@@ -136,7 +136,7 @@ draftPlayer <- function(roster, means, pos){
 
 # the repeatable simulation starts here
 wins <- matrix(ncol=3, nrow=0)
-numSims <- 100
+numSims <- 2
 simIter <- 1
 while(simIter <= numSims){
 
@@ -214,7 +214,7 @@ sigma <- as.matrix(nearPD(sigma)$mat)
 
 
 # run the solver and get a set of solutions
-solns <- ffbSolve(mu, sigma, allPlayerPos, oppRoster, oppActive, posConstraints)
+solns <- ffbSolve(mu, sigma, allPlayerPos, oppRoster, oppActive, posConstraints, myActive, globalOptim=TRUE)
 
 # see how well we did
 getOutcome <- function(){
