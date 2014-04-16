@@ -87,7 +87,7 @@ integerizeSolution <- function(soln, pos, posConstraints) {
   sort(res)
 }
 
-ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints){
+ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, globalOptim=FALSE){
   numPlayers <- length(mu)
   rosterSize <- length(oppRoster)
   
@@ -130,6 +130,9 @@ ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints){
   soln_local <- res$par
   
   # global optimization using differential evolution
+  soln_global <- soln_local
+  if(globalOptim){
+    
   initPop <- t(m_init)
   popSize <- 10 * numPlayers
   dontSelect <- which(mySelectionPlayerMeans == 0)
@@ -146,6 +149,7 @@ ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints){
                  DEoptim.control(NP=popSize,initialpop=initPop, parallelType=1, parVar=c()))
   runningTime <- proc.time() - startTime
   soln_global <- res$optim$bestmem
+  }
   
   solns <- list(soln_local, soln_global)
   

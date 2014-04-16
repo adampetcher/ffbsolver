@@ -136,7 +136,7 @@ draftPlayer <- function(roster, means, pos){
 
 # the repeatable simulation starts here
 wins <- matrix(ncol=3, nrow=0)
-numSims <- 2
+numSims <- 100
 simIter <- 1
 while(simIter <= numSims){
 
