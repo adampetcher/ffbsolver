@@ -37,7 +37,7 @@ objective_with_constraints <- function(m, sigma, obj_mu, o_sigma, o_mu, A, b){
 gradient <- function(m, sigma, obj_mu, o_sigma, o_mu){
   m_mat <- as(m, "matrix")
   covSum <- as.vector(o_sigma+t(m_mat)%*%sigma%*%m_mat)
-  term1 <- -mu/sqrt(covSum)
+  term1 <- -obj_mu/sqrt(covSum)
   term2 <- -(as.vector(-t(m_mat)%*%obj_mu+o_mu)*(sigma%*%m_mat))/covSum^(3/2)
   term1 + term2
 }
@@ -95,6 +95,7 @@ integerizeSolution <- function(soln, pos, posConstraints) {
   
   sort(res)
 }
+
 
 ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, initSoln, globalOptim=FALSE, randomInitPop=FALSE){
   numPlayers <- length(mu)
