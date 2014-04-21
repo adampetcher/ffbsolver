@@ -6,7 +6,7 @@ source("ffbsolver.R")
 
 numTeams <- 10 # the total number of teams
 rosterSize <- 10
-minMean <- 4
+minMean <- 1.25
 
 numQB <- 1
 numTE <- 1
@@ -39,11 +39,22 @@ history <- data[1:16,]
 historyMeans <- colMeans(history)
 
 # Trim the data to ignore players that are not valuable
-goodPlayers <- which(historyMeans >= minMean)
+# first remove every player with a mean less than 1
+goodPlayers <- which(historyMeans >= 1)
 goodPlayerData <- history[,goodPlayers]
 goodPlayerPos <- positions[,goodPlayers]
 numGoodPlayers <- dim(goodPlayerData)[2]
 goodPlayerMeans <- colMeans(goodPlayerData)
+#then remove every player with a mean below that of his position
+posMeans <- as.matrix(goodPlayerPos) %*% as.matrix(goodPlayerMeans) /rowSums(goodPlayerPos)
+playerMeanDiff <- goodPlayerMeans - minMean * t(as.matrix(posMeans)) %*% as.matrix(goodPlayerPos)
+goodPlayers <- which(playerMeanDiff >= 0)
+goodPlayerData <- goodPlayerData[,goodPlayers]
+goodPlayerPos <- goodPlayerPos[,goodPlayers]
+numGoodPlayers <- dim(goodPlayerData)[2]
+goodPlayerMeans <- colMeans(goodPlayerData)
+
+
 
 chooseActivePlayers <- function(means, pos){
   res <- numeric(0)  
@@ -134,12 +145,6 @@ draftPlayer <- function(roster, means, pos){
   player
 }
 
-# the repeatable simulation starts here
-wins <- matrix(ncol=3, nrow=0)
-numSims <- 2
-simIter <- 1
-while(simIter <= numSims){
-
 # We assume that each manager has a roster -- so allocate some of the players to the rosters
 # to make the simulation realistic, we will have the managers draft players
 
@@ -212,26 +217,16 @@ sigma <- cov(optPlayerData)
 # sigma may only be positive semidefinite, and we want it to be positive definite
 sigma <- as.matrix(nearPD(sigma)$mat)
 
-
+methods <- list(list(fn=ffbSolve_constrOptim)
+                , list(fn=ffbSolve_constrOptim_approx)
+                , list(fn=ffbSolve_DEOptim, randomInitPop=FALSE) 
+                #, list(fn=ffbSolve_DEOptim, randomInitPop=TRUE, 
+                #     oppRoster=oppRoster, posConstraints=posConstraints, pos=allPlayerPos)
+                )
 # run the solver and get a set of solutions
-solns <- ffbSolve(mu, sigma, allPlayerPos, oppRoster, oppActive, posConstraints, myActive, globalOptim=TRUE)
+solns <- ffbSolve(mu, sigma, allPlayerPos, oppRoster, oppActive, posConstraints, myActive, methods)
 
-# see how well we did
-getOutcome <- function(){
-  rmvnorm(1, mean=mu, sigma=sigma)
-}
-
-outcome <- getOutcome()
-
-solns <- cbind(sort(myActive), solns)
-myPoints <- apply(solns, 2, function(x) sum(outcome[x]))
-oppPoints <- sum(outcome[oppActive])
-
-win <- myPoints > oppPoints
-
-wins <- rbind(wins, win)
-simIter <- simIter+1
-
-}
+# the solver also calculates objective values for all of the solutions (including the naive solution)
+# we can run the simulation several times and see how often the solver comes up with a better value then the naive solution
 
   
