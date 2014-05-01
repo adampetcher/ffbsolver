@@ -37,7 +37,7 @@ objective <- function(m, sigma, obj_mu, o_sigma, o_mu){
   (o_mu - t(m_mat)%*%obj_mu)/sqrt(covSum)
 }
 
-objective_with_constraints <- function(m, sigma, obj_mu, o_sigma, o_mu, A, b){
+objective_with_constraints <- function(m, sigma, obj_mu, o_sigma, o_mu, A, b, penalty=10){
   m_mat <- as(m, "matrix")
   covSum <- o_sigma + t(m_mat)%*%sigma%*%m_mat
   res <- (o_mu - t(m_mat)%*%obj_mu)/sqrt(covSum)
@@ -48,7 +48,7 @@ objective_with_constraints <- function(m, sigma, obj_mu, o_sigma, o_mu, A, b){
   else 
   {
     feasibleTest <- pmin(feasibleTest, 0)
-    res + 2 ^ 10*abs(sum(feasibleTest))
+    res + 2 ^ penalty*abs(sum(feasibleTest))
   }
 }
 
@@ -117,7 +117,7 @@ integerizeSolution <- function(soln, pos, posConstraints) {
 
 ffbSolve_constrOptim <- function(options, m_init, A, b, sigma, mu, o_sigma, o_mu){
   numPlayers <- length(m_init)
-  m_init_interior <- m_init - numPlayers*epsilon*m_init + rep(epsilon/2, numPlayers)
+  m_init_interior <- m_init + rep(epsilon/numPlayers, numPlayers) - m_init * rep(epsilon)
   res <- constrOptim(m_init_interior, objective, gradient, A, b, outer.iterations=1000, 
                      sigma=sigma, obj_mu=mu, o_sigma=o_sigma, o_mu=o_mu)
   res$par
@@ -125,7 +125,7 @@ ffbSolve_constrOptim <- function(options, m_init, A, b, sigma, mu, o_sigma, o_mu
 
 ffbSolve_constrOptim_approx <- function(options, m_init, A, b, sigma, mu, o_sigma, o_mu){
   numPlayers <- length(m_init)
-  m_init_interior <- m_init - numPlayers*epsilon*m_init + rep(epsilon/2, numPlayers)
+  m_init_interior <- m_init + rep(epsilon/numPlayers, numPlayers) - m_init * rep(epsilon)
   res <- constrOptim(m_init_interior, objective_approx, NULL, A, b, outer.iterations=1000, 
                      sigma=sigma, obj_mu=mu, o_sigma=o_sigma, o_mu=o_mu)
   res$par
@@ -133,6 +133,7 @@ ffbSolve_constrOptim_approx <- function(options, m_init, A, b, sigma, mu, o_sigm
 
 ffbSolve_DEOptim <- function(options, m_init, A, b, sigma, mu, o_sigma, o_mu){
   randomInitPop <- options$randomInitPop
+  penalty <- options$penalty
   numPlayers <- length(m_init)
   initPop <- NULL
   popSize <- 10 * numPlayers
@@ -151,18 +152,23 @@ ffbSolve_DEOptim <- function(options, m_init, A, b, sigma, mu, o_sigma, o_mu){
   }
   
   res <- DEoptim(objective_with_constraints, rep(0, numPlayers), rep(1, numPlayers), 
-                 sigma=sigma, obj_mu=mu, o_sigma=o_sigma, o_mu=o_mu, A=A, b=b,
-                 DEoptim.control(iter=1000,
+                 sigma=sigma, obj_mu=mu, o_sigma=o_sigma, o_mu=o_mu, A=A, b=b, penalty=penalty,
+                 DEoptim.control(iter=2000, trace=FALSE,
                                  NP=popSize,initialpop=initPop, 
                                  parallelType=1, parVar=c()))
-  res$optim$bestmem
+  soln <- res$optim$bestmem
+  # there is a chance that the solution will be invalid -- use the default solution in this case
+  #if(prod(A %*% soln - b >= 0) == 0){
+  #  soln <- m_init
+  #}
+  soln
 }
 
 ffbOptMethod <- function(options, m_init, A, b, sigma, mu, o_sigma, o_mu){
   options$fn(options, m_init, A, b, sigma, mu, o_sigma, o_mu)
 }
 
-ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, initSoln, methods){
+ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, initSoln, methods, fixedPlayers=c()){
   numPlayers <- length(mu)
   rosterSize <- length(oppRoster)
   
@@ -187,19 +193,33 @@ ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, initS
   A <- rbind(A_id, -1 * A_id, A_pos)
   A <- rbind(A, A_unavailable)
   
+  # fixed players must be active
+  i <- 1
+  while(i <= length(fixedPlayers)){
+    A <- rbind(A, as.vector(sparseVector(length=numPlayers, i=fixedPlayers[i], x=1)))
+    i <- i + 1
+  }
+  
   b <- c(rep(0, numPlayers), rep(-1, numPlayers),-posConstraints[1],-posConstraints[2],
          -(posConstraints[3] + posConstraints[5]),-(posConstraints[4] + posConstraints[5]),
          -(posConstraints[3] + posConstraints[4] + posConstraints[5]))
   
-  # we allow the selection of only a small amount of some player that is on the opponent's roster
+  # don't select players from the opponent's roster
   b <- c(b, rep(-epsilon, rosterSize))
+  
+  # always select fixed players
+  i <- 1
+  while(i <= length(fixedPlayers)){
+    b <- c(b, 1 - epsilon)
+    i <- i + 1
+  }
   
   m_init <- as.vector(sparseVector(i=sort(as.vector(initSoln)), x=1, length=numPlayers)) 
 
   # methods is a list of optimization methods and parameters.  
   # For each one, compute the fractional solution
   
-  solns <- lapply(methods, ffbOptMethod, m_init, A, b, sigma, mu, o_sigma, o_mu)
+  solns <- lapply(methods, ffbOptMethod, m_init, A, b, sigma, mu, o_sigma, o_mu) 
   
   solnsVals <- sapply(solns, objective, sigma=sigma, obj_mu=mu, o_sigma=o_sigma, o_mu=o_mu)
   initVal <- objective(m_init, sigma, mu, o_sigma, o_mu)
@@ -209,7 +229,11 @@ ffbSolve <- function(mu, sigma, pos, oppRoster, oppActive, posConstraints, initS
   integerSolnsVecs <- lapply(integerSolnsVecs, as.vector)
   intSolnsVals <- sapply(integerSolnsVecs, objective, sigma=sigma, obj_mu=mu, o_sigma=o_sigma, o_mu=o_mu)
   
-  list(solns=solns, integerSolns=integerSolns, initVal=initVal, solnsVals=solnsVals, intSolnsVals=intSolnsVals)
+  solnsValid <- sapply(solns, function(x) prod(A %*% x - b >= 0))
+  intSolnsValid <- sapply(integerSolnsVecs, function(x) prod(A %*% x - b >= 0))
+  
+  list(solns=solns, integerSolns=integerSolns, initVal=initVal, solnsVals=solnsVals, intSolnsVals=intSolnsVals,
+       solnsValid=solnsValid, intSolnsValid=intSolnsValid)
   
 }
 

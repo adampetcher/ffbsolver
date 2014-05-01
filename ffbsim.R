@@ -6,7 +6,7 @@ source("ffbsolver.R")
 
 numTeams <- 10 # the total number of teams
 rosterSize <- 10
-minMean <- 1.25
+minMean <- 1.2
 
 numQB <- 1
 numTE <- 1
@@ -145,9 +145,16 @@ draftPlayer <- function(roster, means, pos){
   player
 }
 
+#repeatable simulation starts here
+numSims <- 100
+simIter <- 1
+allResults <- list()
+while(simIter <= numSims){
+  
+print(paste("Running simulation", simIter))
+
 # We assume that each manager has a roster -- so allocate some of the players to the rosters
 # to make the simulation realistic, we will have the managers draft players
-
 availableMeans <- goodPlayerMeans
 rosters <- list()
 i <- 1
@@ -155,6 +162,9 @@ while(i <= numTeams){
   rosters[[i]] <- numeric(0)
   i <- i + 1
 }
+
+print("Drafting players")
+
 startTeam <- sample(0 : numTeams-1, 1)
 round <- 1
 dir <- 1
@@ -197,6 +207,7 @@ availablePlayerMeans <- colMeans(availablePlayerData)
 allPlayerPos <- cBind(oppPlayerPos, myPlayerPos, availablePlayerPos)
 
 #choose opponent's active players
+print("Choosing opponent's active players")
 oppActive <- chooseActivePlayers(c(oppPlayerMeans, rep(0, length(myPlayerMeans)), availablePlayerMeans), allPlayerPos)
 # randomly choose the players that remain on the opponent's roster
 oppRoster <- oppActive
@@ -205,6 +216,7 @@ keptPlayers <- sample(keepablePlayers, rosterSize - length(oppRoster))
 oppRoster <- c(oppRoster, keptPlayers)
 
 # choose my active players by maximizing expected points
+print("Choosing my (initial) active players")
 mySelectionPlayerMeans <- c(oppPlayerMeans, myPlayerMeans, availablePlayerMeans)
 mySelectionPlayerMeans[oppRoster] <- 0
 myActive <- chooseActivePlayers(mySelectionPlayerMeans, allPlayerPos)
@@ -217,16 +229,100 @@ sigma <- cov(optPlayerData)
 # sigma may only be positive semidefinite, and we want it to be positive definite
 sigma <- as.matrix(nearPD(sigma)$mat)
 
+# We want to create a realistic scenario in which the naive solution is (somewhat) likely to be sub-optimal.
+# The scenario is that there is one game left in the week, the opponent's players have all played, 
+#  and we have played all of our players except one.  We get to choose one player for that position.
+
+print("Fixing some players and outcomes")
+
+# get the outcome for the week
+outcome <- rmvnorm(1, mean=mu, sigma=sigma)
+
+#choose players to fix on my team
+myFixed <- myActive[1:length(myActive)-1]
+
+# set the means of the fixed players to their outcomes
+mu[myFixed] <- outcome[myFixed]
+mu[oppActive] <- outcome[oppActive]
+
+# set the (co)variances of the fixed players to 0
+i <- 1
+while(i <= length(myFixed)){
+  sigma[myFixed[i],] <- 0
+  sigma[, myFixed[i]] <- 0
+  i <- i + 1
+}
+i <- 1
+while(i <= length(oppActive)){
+  sigma[oppActive[i],] <- 0
+  sigma[, oppActive[i]] <- 0
+  i <- i + 1
+}
+
+# that may have killed positive-definiteness -- fix it
+sigma <- as.matrix(nearPD(sigma)$mat)
+
 methods <- list(list(fn=ffbSolve_constrOptim)
                 , list(fn=ffbSolve_constrOptim_approx)
-                , list(fn=ffbSolve_DEOptim, randomInitPop=FALSE) 
-                #, list(fn=ffbSolve_DEOptim, randomInitPop=TRUE, 
+                , list(fn=ffbSolve_DEOptim, randomInitPop=FALSE, penalty=30) 
+                #, list(fn=ffbSolve_DEOptim, randomInitPop=TRUE, penalty=30,
                 #     oppRoster=oppRoster, posConstraints=posConstraints, pos=allPlayerPos)
                 )
 # run the solver and get a set of solutions
-solns <- ffbSolve(mu, sigma, allPlayerPos, oppRoster, oppActive, posConstraints, myActive, methods)
-
+print("Running solver")
+solns <- ffbSolve(mu, sigma, allPlayerPos, oppRoster, oppActive, posConstraints, myActive, methods, myFixed)
+allResults[[simIter]] <- solns
 # the solver also calculates objective values for all of the solutions (including the naive solution)
 # we can run the simulation several times and see how often the solver comes up with a better value then the naive solution
+simIter <- simIter + 1
+}
 
+objective_cdf <- function(m){
+  o_mat <- as(o, "matrix")
+  m_mat <- as(m, "matrix")
+  pnorm(0, t(o_mat) %*% mu - t(m_mat) %*% mu, t(o_mat) %*% sigma %*% o_mat + t(m_mat) %*% sigma %*% m_mat)
+
+}
+
+plotResults <- function(results){
   
+  optVals <- matrix(0, nrow=0, ncol=2)
+  i <- 1
+  while(i <= length(results)){
+    newEntry <- c(results[[i]]$initVal, results[[i]]$intSolnsVals[3])
+    if(results[[1]]$intSolnsValid[3] == 0){
+      newEntry[2] <- newEntry[1]
+    }
+    optVals <- rbind(optVals, newEntry)
+    i <- i + 1
+  }
+  
+  xData <- optVals[,1]
+  yData <- optVals[,1] - optVals[,2]
+  
+  plot(xData, yData, xlab="Objective Value (Naive Solution)", ylab="Optimization Improvement", ylim=c(0, 10), xlim=c(-20, 20))
+  abline(h=0)
+}
+
+countResults <- function(results, method){
+  
+  res <- c(0, 0, 0, 0)
+  i <- 1
+  while(i <= length(results)){
+    solnValid <-  results[[i]]$solnsValid[method]
+    intSolnValid <- results[[i]]$intSolnsValid[method]
+    initVal <- results[[i]]$initVal
+    solnVal <- results[[i]]$solnsVals[method]
+    intSolnVal <- results[[i]]$intSolnsVals[method]
+    
+    res[1] <- res[1] + solnValid
+    res[2] <- res[2] + intSolnValid
+    res[3] <- res[3] + (solnValid && (solnVal > initVal))
+    res[4] <- res[4] + (intSolnValid && (intSolnVal > initVal))
+    
+    i <- i + 1
+  }
+  
+  res
+}
+
